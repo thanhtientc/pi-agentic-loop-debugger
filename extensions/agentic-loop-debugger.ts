@@ -3,7 +3,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_PORT = 45998;
 const PACKAGE_DIAGRAM = fileURLToPath(new URL("../agentic-loop-lifecycle.mmd", import.meta.url));
@@ -288,6 +288,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    setNode("START", "Session starts", "session_start", undefined, "event");
     ctx.ui.setStatus("agentic-loop-debugger", mode === "off" ? "Debugger off · /agentic-loop-debugger on" : "Debugger stepping");
   });
 
@@ -333,9 +334,9 @@ export default function (pi: ExtensionAPI) {
     await checkpoint("message_end", "RESPONSE", "Return response · assistant message_end", ctx, true);
   });
 
-  pi.on("turn_end", async (_event, ctx) => {
+  pi.on("agent_settled", async (_event, ctx) => {
     if (currentNode === "RESPONSE")
-      await checkpoint("turn_end", "WAIT", "Wait for prompt · turn_end", ctx, true);
+      await checkpoint("agent_settled", "WAIT", "Wait for prompt · agent_settled", ctx, true);
   });
 
   pi.on("session_shutdown", async () => {
