@@ -1,0 +1,26 @@
+{
+  "name": "pi-agentic-loop-debugger",
+  "version": "0.1.0",
+  "description": "A local web debugger for the Pi agentic loop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thanhtientc/pi-agentic-loop-debugger.git"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "extensions",
+    "agentic-loop-lifecycle.mmd",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "extensions"
+    ]
+  }
+}
