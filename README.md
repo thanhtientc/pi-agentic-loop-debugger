@@ -49,13 +49,16 @@ The web app binds to `127.0.0.1:45998` by default. Override the port with
 | **Build initial context** | First `context` per agent run |
 | **Start task** | Initial `context` · synthetic checkpoint |
 | **Load Agent Skill** (prompt-provided) | Expanded `<skill>` in `before_agent_start`; initial `context` checkpoint |
-| **Load Agent Skill** (agent-activated) | `tool_execution_start` (`skill` tool or `SKILL.md` path) |
+| **Load Agent Skill** (agent-activated) | `message_end` tool-call batch; `tool_execution_start` (`skill` tool or `SKILL.md` path) |
 | **LLM Core** | `before_provider_request`; continuation `context` |
-| **Choose tool** | `tool_execution_start` |
-| **Use tool** | `tool_execution_start` resume · synthetic `tool.execution` |
-| **Result** | `tool_execution_end` |
+| **Choose tool** | Assistant `message_end` (`toolCall` batch) |
+| **Use tool** | Batch `tool_execution_start`; `tool_execution_update` |
+| **Result** | Batch `tool_execution_end` |
 | **Return response** | `message_end` (assistant message without tool call) |
 | **Human review** | — |
+
+Parallel tool calls are grouped into one **Choose tool → Use tool → Result**
+cycle; individual tool names and progress remain visible in the signal log.
 
 ## Events generally not represented
 
@@ -71,7 +74,6 @@ The web app binds to `127.0.0.1:45998` by default. Override the port with
 - `turn_end`
 - `message_start`
 - `message_update`
-- `tool_execution_update`
 - `tool_call`
 - `tool_result`
 - `user_bash`

@@ -36,6 +36,13 @@ const FALLBACK_DIAGRAM = `flowchart TD
 type Mode = "off" | "step" | "continue";
 type Pause = { release: () => void };
 type Signal = { kind: "signal"; type: string; node: string; label: string; ts: number; source: string; toolName?: string };
+type ToolBatchCall = { name: string; status: "pending" | "running" | "complete" | "error"; progressReported?: boolean };
+type ToolBatch = {
+  calls: Map<string, ToolBatchCall>;
+  expectedIds: Set<string> | null;
+  actionShown: boolean;
+  checkStarted: boolean;
+};
 
 let mode: Mode = "off";
 let server: Server | undefined;
@@ -51,6 +58,7 @@ let currentNode: string | undefined;
 let currentLabel: string | undefined;
 let firstContext = true;
 let promptSkills: string[] = [];
+let activeToolBatch: ToolBatch | undefined;
 const clients = new Set<ServerResponse>();
 
 function send(payload: unknown) {
@@ -259,6 +267,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     firstContext = true;
     promptSkills = extractPromptSkills(event.prompt);
+    activeToolBatch = undefined;
     await checkpoint("before_agent_start", "INPUT", "Handle input · before_agent_start", ctx, true);
   });
 
@@ -281,26 +290,106 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", async (event, ctx) => {
-    const skill = skillTool(event.toolName, event.args);
-    await checkpoint("tool_execution_start", skill ? "SKILL" : "TOOL", skill ? `Load Agent Skill · ${event.toolName}` : `Choose tool · ${event.toolName}`, ctx, false, event.toolName);
-    setNode("ACTION", `Use tool · ${event.toolName}`, "tool_execution_start", "hook", event.toolName);
+    let batch = activeToolBatch;
+    const id = event.toolCallId;
+    let call = batch?.calls.get(id);
+    if (!batch) {
+      batch = { calls: new Map(), expectedIds: null, actionShown: false, checkStarted: false };
+      activeToolBatch = batch;
+      const skill = skillTool(event.toolName, event.args);
+      await checkpoint(
+        "tool_execution_start",
+        skill ? "SKILL" : "TOOL",
+        skill ? `Load Agent Skill · ${event.toolName}` : `Choose tool · ${event.toolName}`,
+        ctx,
+        true,
+        event.toolName,
+      );
+    }
+    if (!call) {
+      call = { name: event.toolName, status: "pending" };
+      batch.calls.set(id, call);
+      batch.expectedIds?.add(id);
+    }
+    call.status = "running";
+    if (!batch.actionShown) {
+      batch.actionShown = true;
+      const names = [...batch.calls.values()].map((item) => item.name).join(", ");
+      setNode("ACTION", `Use tool · ${batch.calls.size} call(s) running`, "tool_execution_start", names);
+    } else {
+      send({ kind: "signal", type: "tool_execution_start", node: "ACTION", label: `Tool started · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
+    }
+  });
+
+  pi.on("tool_execution_update", (event) => {
+    const call = activeToolBatch?.calls.get(event.toolCallId);
+    if (!call) return;
+    call.status = "running";
+    if (call.progressReported) return;
+    call.progressReported = true;
+    send({ kind: "signal", type: "tool_execution_update", node: "ACTION", label: `Tool progress · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
-    await checkpoint("tool_execution_end", "CHECK", `Result · ${event.isError ? "tool failed" : "tool completed"}`, ctx);
+    const batch = activeToolBatch;
+    if (!batch) {
+      await checkpoint("tool_execution_end", "CHECK", `Result · ${event.isError ? "tool failed" : "tool completed"}`, ctx, true, event.toolName);
+      return;
+    }
+    let call = batch.calls.get(event.toolCallId);
+    if (!call) {
+      call = { name: event.toolName, status: "pending" };
+      batch.calls.set(event.toolCallId, call);
+      batch.expectedIds?.add(event.toolCallId);
+    }
+    call.status = event.isError ? "error" : "complete";
+    send({ kind: "signal", type: "tool_execution_end", node: "ACTION", label: `Tool ${call.status} · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
+    batch.expectedIds ??= new Set(batch.calls.keys());
+    const finished = [...batch.expectedIds].every((id) => {
+      const status = batch.calls.get(id)?.status;
+      return status === "complete" || status === "error";
+    });
+    if (finished && !batch.checkStarted) {
+      batch.checkStarted = true;
+      await checkpoint("tool_execution_end", "CHECK", `Result · ${batch.calls.size} tool call(s) finished`, ctx, true);
+      if (activeToolBatch === batch) activeToolBatch = undefined;
+    }
   });
 
   pi.on("message_end", async (event, ctx) => {
-    const message = event.message as { role?: string; content?: Array<{ type?: string }> };
+    const message = event.message as { role?: string; content?: Array<{ type?: string; id?: string; name?: string; arguments?: unknown }> };
     if (message.role !== "assistant") return;
-    const hasToolCall = (message.content || []).some((part) => part.type === "toolCall" || part.type === "tool_call");
-    if (hasToolCall) return;
+    const toolCalls = (message.content || []).filter((part) => part.type === "toolCall" || part.type === "tool_call");
+    if (toolCalls.length) {
+      const calls = new Map<string, ToolBatchCall>();
+      const names: string[] = [];
+      toolCalls.forEach((part, index) => {
+        const id = String(part.id || `tool-call-${index}`);
+        const name = String(part.name || "tool");
+        calls.set(id, { name, status: "pending" });
+        names.push(name);
+      });
+      activeToolBatch = {
+        calls,
+        expectedIds: new Set(calls.keys()),
+        actionShown: false,
+        checkStarted: false,
+      };
+      const skillOnly = toolCalls.length === 1 && skillTool(names[0], toolCalls[0].arguments);
+      const node = skillOnly ? "SKILL" : "TOOL";
+      const label = skillOnly
+        ? `Load Agent Skill · ${names[0]}`
+        : `Choose tool · ${calls.size} call(s): ${names.join(", ")}`;
+      await checkpoint("message_end", node, label, ctx, true, names.join(", "));
+      return;
+    }
     await checkpoint("message_end", "RESPONSE", "Return response · assistant message_end", ctx, true);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     if (currentNode === "RESPONSE")
       await checkpoint("agent_settled", "WAIT", "Wait for prompt · agent_settled", ctx, true);
+    activeToolBatch = undefined;
   });
 
   pi.on("session_shutdown", async () => {
