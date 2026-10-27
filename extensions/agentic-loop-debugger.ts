@@ -117,13 +117,16 @@ function setDebuggerMode(next: Mode, ctx: ExtensionContext) {
   ctx.ui.setStatus("agentic-loop-debugger", next === "off" ? "Debugger off" : next === "step" ? "Debugger stepping" : "Debugger continuing");
 }
 
-function toolNode(toolName: string, args: unknown) {
+function extractPromptSkills(prompt: string) {
+  const names: string[] = [];
+  for (const match of prompt.matchAll(/<skill\s+name="([^"]+)"/g)) names.push(match[1]);
+  return [...new Set(names)];
+}
+
+function skillTool(toolName: string, args: unknown) {
   let serialized = "";
   try { serialized = JSON.stringify(args); } catch { /* ignore */ }
-  if (/skill/i.test(toolName) || /SKILL\.md/i.test(serialized)) {
-    return { node: "SKILL", label: `Load Agent Skill · ${toolName}` };
-  }
-  return { node: "TOOL", label: `Choose tool · ${toolName}` };
+  return /skill/i.test(toolName) || /SKILL\.md/i.test(serialized);
 }
 
 function buildPage() {
