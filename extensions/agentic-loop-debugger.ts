@@ -36,10 +36,11 @@ const FALLBACK_DIAGRAM = `flowchart TD
 type Mode = "off" | "step" | "continue";
 type Pause = { release: () => void };
 type Signal = { kind: "signal"; type: string; node: string; label: string; ts: number; source: string; toolName?: string };
-type ToolBatchCall = { name: string; status: "pending" | "running" | "complete" | "error"; progressReported?: boolean };
+type ToolBatchCall = { name: string; status: "pending" | "running" | "complete" | "error"; skill?: boolean; progressReported?: boolean };
 type ToolBatch = {
   calls: Map<string, ToolBatchCall>;
   expectedIds: Set<string> | null;
+  skillOnly: boolean;
   actionShown: boolean;
   checkStarted: boolean;
 };
@@ -294,24 +295,29 @@ export default function (pi: ExtensionAPI) {
     const id = event.toolCallId;
     let call = batch?.calls.get(id);
     if (!batch) {
-      batch = { calls: new Map(), expectedIds: null, actionShown: false, checkStarted: false };
+      const isSkill = skillTool(event.toolName, event.args);
+      batch = { calls: new Map(), expectedIds: null, skillOnly: isSkill, actionShown: false, checkStarted: false };
       activeToolBatch = batch;
-      const skill = skillTool(event.toolName, event.args);
       await checkpoint(
         "tool_execution_start",
-        skill ? "SKILL" : "TOOL",
-        skill ? `Load Agent Skill · ${event.toolName}` : `Choose tool · ${event.toolName}`,
+        isSkill ? "SKILL" : "TOOL",
+        isSkill ? `Load Agent Skill · ${event.toolName}` : `Choose tool · ${event.toolName}`,
         ctx,
         true,
         event.toolName,
       );
     }
     if (!call) {
-      call = { name: event.toolName, status: "pending" };
+      call = { name: event.toolName, status: "pending", skill: skillTool(event.toolName, event.args) };
       batch.calls.set(id, call);
       batch.expectedIds?.add(id);
     }
+    call.skill = skillTool(event.toolName, event.args);
     call.status = "running";
+    if (batch.skillOnly) {
+      send({ kind: "signal", type: "tool_execution_start", node: "SKILL", label: `Skill load started · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
+      return;
+    }
     if (!batch.actionShown) {
       batch.actionShown = true;
       const names = [...batch.calls.values()].map((item) => item.name).join(", ");
@@ -327,7 +333,7 @@ export default function (pi: ExtensionAPI) {
     call.status = "running";
     if (call.progressReported) return;
     call.progressReported = true;
-    send({ kind: "signal", type: "tool_execution_update", node: "ACTION", label: `Tool progress · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
+    send({ kind: "signal", type: "tool_execution_update", node: activeToolBatch?.skillOnly ? "SKILL" : "ACTION", label: `Tool progress · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
@@ -343,7 +349,7 @@ export default function (pi: ExtensionAPI) {
       batch.expectedIds?.add(event.toolCallId);
     }
     call.status = event.isError ? "error" : "complete";
-    send({ kind: "signal", type: "tool_execution_end", node: "ACTION", label: `Tool ${call.status} · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
+    send({ kind: "signal", type: "tool_execution_end", node: batch.skillOnly ? "SKILL" : "ACTION", label: `${batch.skillOnly ? "Skill" : "Tool"} ${call.status} · ${event.toolName}`, toolName: event.toolName, ts: Date.now(), source: "event" });
     batch.expectedIds ??= new Set(batch.calls.keys());
     const finished = [...batch.expectedIds].every((id) => {
       const status = batch.calls.get(id)?.status;
@@ -351,7 +357,13 @@ export default function (pi: ExtensionAPI) {
     });
     if (finished && !batch.checkStarted) {
       batch.checkStarted = true;
-      await checkpoint("tool_execution_end", "CHECK", `Result · ${batch.calls.size} tool call(s) finished`, ctx, true);
+      await checkpoint(
+        "tool_execution_end",
+        batch.skillOnly ? "LLM" : "CHECK",
+        batch.skillOnly ? "LLM Core · skill loaded" : `Result · ${batch.calls.size} tool call(s) finished`,
+        ctx,
+        true,
+      );
       if (activeToolBatch === batch) activeToolBatch = undefined;
     }
   });
@@ -366,16 +378,17 @@ export default function (pi: ExtensionAPI) {
       toolCalls.forEach((part, index) => {
         const id = String(part.id || `tool-call-${index}`);
         const name = String(part.name || "tool");
-        calls.set(id, { name, status: "pending" });
+        calls.set(id, { name, status: "pending", skill: skillTool(name, part.arguments) });
         names.push(name);
       });
+      const skillOnly = [...calls.values()].every((call) => call.skill === true);
       activeToolBatch = {
         calls,
         expectedIds: new Set(calls.keys()),
+        skillOnly,
         actionShown: false,
         checkStarted: false,
       };
-      const skillOnly = toolCalls.length === 1 && skillTool(names[0], toolCalls[0].arguments);
       const node = skillOnly ? "SKILL" : "TOOL";
       const label = skillOnly
         ? `Load Agent Skill · ${names[0]}`

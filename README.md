@@ -59,6 +59,8 @@ The web app binds to `127.0.0.1:45998` by default. Override the port with
 
 Parallel tool calls are grouped into one **Choose tool → Use tool → Result**
 cycle; individual tool names and progress remain visible in the signal log.
+Skill-only tool batches highlight **Load Agent Skill** and continue to **LLM
+Core**, skipping the generic **Use tool → Result** path.
 
 ## Events generally not represented
 
