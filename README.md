@@ -6,6 +6,9 @@ at awaited Pi extension events for educational purposes.
 The package includes a Mermaid diagram. A project-local
 `agentic-loop-lifecycle.mmd` takes precedence when present.
 
+Mermaid 11.17.2 is bundled and served locally; the debugger does not need a CDN
+to render the diagram.
+
 ## Install from GitHub
 
 Install globally from GitHub with:
@@ -53,6 +56,38 @@ The web app binds to `127.0.0.1:45998` by default. Override the port with
 | **Result** | `tool_execution_end` |
 | **Return response** | `message_end` (assistant message without tool call) |
 | **Human review** | — |
+
+## Events generally not represented
+
+- `context_with_system`
+- `before_provider_headers`
+- `after_provider_response`
+- `provider_stream_event`
+- `cache_warming_decision`
+- `agent_start`
+- `agent_end`
+- `agent_before_settle`
+- `turn_start`
+- `turn_end`
+- `message_start`
+- `message_update`
+- `tool_execution_update`
+- `tool_call`
+- `tool_result`
+- `user_bash`
+- `ui_prompt_start`
+- `ui_prompt_end`
+- `session_info_changed`
+- `session_before_switch`
+- `session_before_fork`
+- `session_before_compact`
+- `session_compact`
+- `session_compact_failed`
+- `session_before_tree`
+- `session_tree`
+- `mcp_servers_change`
+- `model_select`
+- `thinking_level_select`
 
 ## Local development
 
